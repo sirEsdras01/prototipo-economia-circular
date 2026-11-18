@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useStore, livePeers } from './lib/store.jsx';
 import { RESTAURANTS } from './lib/seed.js';
 import { Icon, Segmented } from './components/ui.jsx';
+import logo from './assets/repack-logo.png';
 import StudentApp from './student/StudentApp.jsx';
 import RestaurantApp from './restaurant/RestaurantApp.jsx';
 import InstitutionApp from './institution/InstitutionApp.jsx';
@@ -39,11 +40,8 @@ export default function App() {
     <div className={`app profile-${profile}`}>
       <header className="topbar">
         <div className="brand">
-          <span className="mark" aria-hidden="true"><i /></span>
-          <div>
-            <b><span className="brand-long">Plataforma de reutilización · </span>Distrito Tec</b>
-            <span>Prototipo · nombre provisional · modo demostración</span>
-          </div>
+          <img className="brand-logo" src={logo} alt="RePack" />
+          <span className="brand-tag">Prototipo · demo</span>
         </div>
         <Segmented ariaLabel="Perfil" options={PROFILES} value={profile} onChange={choose} />
         <div className="top-actions">
@@ -93,7 +91,7 @@ export default function App() {
         ))}
       </div>
       <footer className="app-foot">
-        Prototipo de demostración. Lo que registran los participantes se comparte en vivo entre dispositivos mediante un servidor público de mensajería: no escribas datos personales. Restaurantes, usuarios y cifras son sintéticos.
+        RePack · prototipo de demostración. Lo que registran los participantes se comparte en vivo entre dispositivos mediante un servidor público de mensajería: no escribas datos personales. Restaurantes, usuarios y cifras son sintéticos.
         No representa una alianza, contrato ni implementación con ninguna institución.
       </footer>
     </div>

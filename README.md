@@ -1,4 +1,4 @@
-# Prototipo · Plataforma de reutilización para Distrito Tec (nombre provisional)
+# RePack · Prototipo para Distrito Tec
 
 **Demo pública:** https://siresdras01.github.io/prototipo-economia-circular/
 
@@ -22,6 +22,9 @@ Al registrar la venta, el celular del alumno cambia a «Validado» y el panel in
 - Si no hay conexión en vivo, la app sigue funcionando en cada teléfono y los códigos se validan por su dígito de control.
 
 **Aviso:** los brokers públicos no garantizan disponibilidad ni privacidad. Es una demo con datos sintéticos; no escribas datos personales.
+
+## Impacto ambiental
+Cada estudiante ve en **Mi impacto** cuántos recipientes desechables sustituyó (solo los confirmados por el restaurante), su progreso por hitos y su historial. La institución ve el impacto agregado. Metodología e implementación: [`codigo/IMPACTO_AMBIENTAL.md`](codigo/IMPACTO_AMBIENTAL.md).
 
 ## Código fuente
 En la carpeta [`codigo/`](codigo/) (React + Vite). Instrucciones en `codigo/README.md`.

@@ -1,5 +1,5 @@
 {
-  "name": "prototipo-economia-circular",
+  "name": "repack-prototipo",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -7,7 +7,8 @@
     "dev": "vite --host",
     "build": "vite build",
     "build:demo": "vite build --mode singlefile",
-    "preview": "vite preview --host"
+    "preview": "vite preview --host",
+    "test": "vitest run"
   },
   "dependencies": {
     "@fontsource/inter": "^5.3.0",
@@ -20,6 +21,7 @@
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
     "vite": "^5.4.11",
-    "vite-plugin-singlefile": "^2.0.3"
+    "vite-plugin-singlefile": "^2.0.3",
+    "vitest": "^2.1.9"
   }
 }

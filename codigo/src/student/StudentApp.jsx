@@ -4,6 +4,8 @@ import { useStore, useNow, codeStatus } from '../lib/store.jsx';
 import { RESTAURANTS, CUISINES, DEMO_USER, PROMOTIONS } from '../lib/seed.js';
 import { money, money0, newCode, fmtDate, fmtDateTime, num, CODE_TTL_MIN, weekStart } from '../lib/utils.js';
 import { Icon, Badge, Button, Notice, QR, SyntheticTag, Stat, Segmented, Empty } from '../components/ui.jsx';
+import logo from '../assets/repack-logo.png';
+import { summarize, series, progress, periodStart, PERIODS, MILESTONES, METHODOLOGY, confirmedSubstitutions, emissionsEstimate } from '../lib/impact.js';
 
 const rest = (id) => RESTAURANTS.find((r) => r.id === id);
 
@@ -27,7 +29,7 @@ function Register() {
   };
   return (
     <form className="s-page register" onSubmit={register}>
-      <div className="register-mark" aria-hidden="true"><Icon name="container" size={30} /></div>
+      <img className="register-logo" src={logo} alt="RePack" />
       <div>
         <p className="eyebrow">Distrito Tec · demostración en vivo</p>
         <h1 className="register-title">Regístrate para participar</h1>
@@ -83,7 +85,7 @@ function StudentShell() {
     { key: 'explore', label: 'Explorar', icon: 'search' },
     { key: 'qr', label: 'Mi código', icon: 'qr', dot: hasActive },
     { key: 'history', label: 'Historial', icon: 'clock' },
-    { key: 'impact', label: 'Impacto', icon: 'impact' },
+    { key: 'impact', label: 'Mi impacto', icon: 'impact' },
   ];
   const current = screen.name === 'promo' ? 'explore' : screen.name;
 
@@ -111,6 +113,7 @@ function useMyStats() {
     const mine = state.transactions.filter((t) => t.userId === meId);
     const verified = mine.filter((t) => t.status === 'verificada');
     const subs = verified.filter((t) => t.substitution === 'confirmada');
+    const substituted = verified.reduce((n, t) => n + confirmedSubstitutions(t), 0);
     const savings = verified.reduce((s, t) => s + t.discount, 0);
     const weeks = new Set(verified.map((t) => weekStart(t.createdAt)));
     // racha: semanas consecutivas (hacia atrás desde esta semana o la anterior) con al menos una operación verificada
@@ -118,7 +121,7 @@ function useMyStats() {
     let w = weekStart(Date.now());
     if (!weeks.has(w)) w -= 7 * 86400000;
     while (weeks.has(w)) { streak++; w -= 7 * 86400000; }
-    return { mine, verified, subs, savings, streak, pending: mine.filter((t) => t.status === 'pendiente') };
+    return { mine, verified, subs, substituted, savings, streak, pending: mine.filter((t) => t.status === 'pendiente') };
   }, [state.transactions, state.me]);
 }
 
@@ -154,7 +157,7 @@ function PromoRow({ p, go }) {
 
 function Home({ go }) {
   const { state } = useStore();
-  const { verified, savings, streak } = useMyStats();
+  const { verified, savings, substituted } = useMyStats();
   const promos = state.promotions.filter((p) => p.active).slice(0, 3);
   const activeRestaurants = new Set(state.promotions.filter((p) => p.active).map((p) => p.restaurantId)).size;
   const today = new Date().toLocaleDateString('es-MX', { weekday: 'short' }).replace('.', '');
@@ -180,10 +183,14 @@ function Home({ go }) {
         <button className="link" onClick={() => go('impact')}>Ajustar</button>
       </section>
 
-      <section className="s-stats">
-        <Stat label="Operaciones verificadas" value={num(verified.length)} />
+      <button className="impact-teaser" onClick={() => go('impact')}>
+        <span className="it-num">{num(substituted)}</span>
+        <span className="it-text"><b>{substituted ? `recipiente${substituted === 1 ? '' : 's'} desechable${substituted === 1 ? '' : 's'} sustituido${substituted === 1 ? '' : 's'}` : 'Tu impacto empieza con tu primera compra'}</b><span>Ver mi impacto</span></span>
+        <Icon name="arrowRight" size={18} />
+      </button>
+      <section className="s-stats two">
+        <Stat label="Compras verificadas con topper" value={num(verified.length)} />
         <Stat label="Ahorro acumulado" value={money0(savings)} />
-        <Stat label="Semanas seguidas" value={num(streak)} />
       </section>
 
       <section>
@@ -332,7 +339,10 @@ function QRScreen({ go, code }) {
   const st = codeStatus(c, now);
   const p = state.promotions.find((x) => x.id === c.promoId);
   const r = rest(c.restaurantId);
-  const tx = state.transactions.find((t) => t.code === c.code && ['verificada', 'rechazada'].includes(t.status));
+  const tx = state.transactions.find((t) => t.code === c.code && ['verificada', 'rechazada', 'revertida'].includes(t.status));
+  const nSub = confirmedSubstitutions(tx);
+  const total = summarize(state.transactions, { userId: state.me?.id }).substituted;
+  const reached = nSub ? progress(total).achieved.find((m) => m > total - nSub && m <= total) : null;
   const pend = state.transactions.find((t) => t.code === c.code && t.status === 'pendiente');
   const remaining = Math.max(0, (c.expiresAt || 0) - now);
   const mm = String(Math.floor(remaining / 60000)).padStart(2, '0');
@@ -370,14 +380,31 @@ function QRScreen({ go, code }) {
       ) : null}
 
       {pend ? (
-        <Notice tone="warn" title="Registro pendiente en el restaurante">
-          El restaurante registró la operación en modo contingencia (folio {pend.folio}). Se confirmará cuando se restablezca la conexión.
+        <Notice tone="warn" title="Compra registrada. La sustitución del recipiente está pendiente de confirmación.">
+          El restaurante la registró sin conexión (folio {pend.folio}). No suma a tu impacto hasta que se confirme.
         </Notice>
+      ) : null}
+
+      {tx && tx.status === 'verificada' ? (
+        nSub ? (
+          <section className="impact-feedback">
+            <p className="eyebrow">Impacto confirmado</p>
+            <h3>¡Tu elección cuenta!</h3>
+            <p>Hoy evitaste utilizar <b>{nSub} recipiente{nSub > 1 ? 's' : ''} desechable{nSub > 1 ? 's' : ''}</b>.</p>
+            <p>Tu impacto acumulado: <b>{total} recipiente{total === 1 ? '' : 's'} sustituido{total === 1 ? '' : 's'}</b>.</p>
+            {reached ? <p className="milestone-hit"><Icon name="check" size={16} stroke={2.5} />Alcanzaste el hito de {reached} recipiente{reached > 1 ? 's' : ''}.</p> : null}
+            <Button icon="impact" onClick={() => go('impact')}>Ver mi impacto</Button>
+          </section>
+        ) : (
+          <Notice tone="info" title="Compra registrada">
+            El restaurante no confirmó la sustitución de un recipiente desechable, así que esta compra no suma a tu impacto.
+          </Notice>
+        )
       ) : null}
 
       {tx ? (
         <div className="receipt">
-          <h3 className="h3">{tx.status === 'verificada' ? 'Compra verificada' : 'Recipiente no aceptado'}</h3>
+          <h3 className="h3">{tx.status === 'verificada' ? 'Compra verificada' : tx.status === 'revertida' ? 'Compra revertida por el restaurante' : 'Recipiente no aceptado'}</h3>
           <dl>
             <div><dt>Transacción</dt><dd>{tx.id}</dd></div>
             <div><dt>Restaurante</dt><dd>{tx.restaurantName || r.name}{tx.validatedBy ? ` · atendió ${tx.validatedBy}` : ''}</dd></div>
@@ -386,7 +413,7 @@ function QRScreen({ go, code }) {
             <div><dt>Precio original</dt><dd>{money(tx.listPrice)}</dd></div>
             <div><dt>Beneficio</dt><dd>{tx.discount ? `−${money(tx.discount)}` : 'Sin promoción'}</dd></div>
             <div><dt>Pagado</dt><dd><b>{money(tx.paid)}</b></dd></div>
-            <div><dt>Recipiente</dt><dd>{tx.containerAccepted ? (tx.substitution === 'confirmada' ? 'Sustituyó un desechable' : 'Aceptado · sin sustitución confirmada') : 'No aceptado'}</dd></div>
+            <div><dt>Recipiente</dt><dd>{tx.status === 'revertida' ? 'Operación revertida' : tx.containerAccepted ? (nSub ? `${nSub} desechable${nSub > 1 ? 's' : ''} sustituido${nSub > 1 ? 's' : ''}` : 'Aceptado · sin sustitución confirmada') : 'No aceptado'}</dd></div>
           </dl>
           {tx.status === 'verificada' ? <p className="fine">Gracias por llevar tu recipiente. Recuerda lavarlo al llegar.</p> : <p className="fine">El restaurante decide qué recipientes son adecuados para su operación.</p>}
           <Button variant="secondary" onClick={() => go('history')}>Ver historial</Button>
@@ -400,7 +427,7 @@ function QRScreen({ go, code }) {
 
 function History({ go }) {
   const { state } = useStore();
-  const { mine, verified, subs, savings } = useMyStats();
+  const { mine, verified, substituted, savings } = useMyStats();
   const [filter, setFilter] = useState('todas');
   const list = mine.filter((t) => filter === 'todas' || (filter === 'verificadas' ? t.status === 'verificada' : t.status !== 'verificada'));
   return (
@@ -410,7 +437,7 @@ function History({ go }) {
       <section className="s-stats">
         <Stat label="Beneficios recibidos" value={money0(savings)} />
         <Stat label="Verificadas" value={num(verified.length)} />
-        <Stat label="Reutilizaciones confirmadas" value={num(subs.length)} />
+        <Stat label="Recipientes sustituidos" value={num(substituted)} />
       </section>
       <Segmented small ariaLabel="Filtrar" value={filter} onChange={setFilter}
         options={[{ value: 'todas', label: 'Todas' }, { value: 'verificadas', label: 'Verificadas' }, { value: 'otras', label: 'Otras' }]} />
@@ -422,7 +449,7 @@ function History({ go }) {
               <div>
                 <b>{r?.name}</b>
                 <span className="muted">{fmtDate(t.createdAt, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })} · {t.id}{t.synthetic ? ' · sintética' : ''}</span>
-                <span className="tx-badges"><Badge status={t.status} />{t.status === 'verificada' ? <Badge status={t.substitution} /> : null}</span>
+                <span className="tx-badges"><Badge status={t.status} />{t.status === 'verificada' ? (confirmedSubstitutions(t) ? <Badge tone="ok">{confirmedSubstitutions(t)} sustituido{confirmedSubstitutions(t) > 1 ? 's' : ''}</Badge> : <Badge status={t.substitution} />) : null}</span>
               </div>
               <div className="tx-amt">
                 <b>{money(t.paid)}</b>
@@ -440,39 +467,172 @@ function History({ go }) {
 
 const DAYS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie'];
 
-function Impact() {
-  const { state, dispatch } = useStore();
-  const { verified, subs, streak, mine } = useMyStats();
-  const accepted = verified.length;
-  const rejected = mine.filter((t) => t.status === 'rechazada').length;
+const fmtKg = (kg) => (kg >= 1 ? `${kg.toLocaleString('es-MX', { maximumFractionDigits: 2 })} kg` : `${Math.round(kg * 1000)} g`);
+
+function ImpactChart({ points, granularity }) {
+  const [sel, setSel] = useState(null);
+  const max = Math.max(1, ...points.map((p) => Math.max(p.substituted, p.purchases)));
+  const label = (ts) => granularity === 'month'
+    ? new Date(ts).toLocaleDateString('es-MX', { month: 'short' }).replace('.', '')
+    : new Date(ts).toLocaleDateString('es-MX', granularity === 'day' ? { weekday: 'short' } : { day: '2-digit', month: 'short' }).replace('.', '');
+  const shown = sel != null ? points[sel] : null;
+  const every = Math.ceil(points.length / 7);
+  return (
+    <div className="ichart">
+      <div className="ichart-readout" aria-live="polite">
+        {shown ? (
+          <><b>{label(shown.start)}</b> · {shown.substituted} recipiente{shown.substituted === 1 ? '' : 's'} sustituido{shown.substituted === 1 ? '' : 's'} · {shown.purchases} compra{shown.purchases === 1 ? '' : 's'} con topper</>
+        ) : <span className="muted">Toca una barra para ver el detalle</span>}
+      </div>
+      <div className="ichart-bars" role="list">
+        {points.map((p, i) => (
+          <button key={p.start} role="listitem" className={`ibar ${sel === i ? 'on' : ''}`} onClick={() => setSel(sel === i ? null : i)}
+            aria-label={`${label(p.start)}: ${p.substituted} recipientes sustituidos, ${p.purchases} compras con topper`}>
+            <span className="ibar-track">
+              <i className="ibar-purchases" style={{ height: `${(p.purchases / max) * 100}%` }} />
+              <i className="ibar-subs" style={{ height: `${(p.substituted / max) * 100}%` }} />
+            </span>
+            <span className="ibar-label">{i % every === 0 || i === points.length - 1 ? label(p.start) : ''}</span>
+          </button>
+        ))}
+      </div>
+      <div className="legend"><span><i style={{ background: '#173D32' }} />Recipientes sustituidos</span><span><i style={{ background: '#C9DCCF' }} />Compras con topper</span></div>
+    </div>
+  );
+}
+
+function Impact({ go }) {
+  const { state, dispatch, live } = useStore();
+  const [period, setPeriod] = useState('30d');
+  const [showMethod, setShowMethod] = useState(false);
+  const meId = state.me?.id;
+  const all = useMemo(() => summarize(state.transactions, { userId: meId }), [state.transactions, meId]);
+  const per = useMemo(() => summarize(state.transactions, { userId: meId, since: periodStart(period) }), [state.transactions, meId, period]);
+  const ser = useMemo(() => series(state.transactions, { userId: meId, period }), [state.transactions, meId, period]);
+  const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0);
+  const month = useMemo(() => summarize(state.transactions, { userId: meId, since: monthStart.getTime() }), [state.transactions, meId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const prog = progress(all.substituted);
+  const mine = state.transactions.filter((t) => t.userId === meId && t.status !== 'duplicada');
+  const pending = mine.filter((t) => t.status === 'pendiente');
+  const refsUsed = [...new Map(mine.filter((t) => t.packagingRef && t.packagingRef.grams).map((t) => [`${t.packagingRef.id}-${t.packagingRef.version}`, t.packagingRef])).values()];
+  const empty = all.topperPurchases === 0;
+  const syncing = live.status === 'connecting' && !state.me?.demo && empty;
   const toggleDay = (d) => {
     const days = state.reminders.days.includes(d) ? state.reminders.days.filter((x) => x !== d) : [...state.reminders.days, d];
     dispatch({ type: 'SET_REMINDERS', reminders: { ...state.reminders, days: DAYS.filter((x) => days.includes(x)) } });
   };
+
   return (
-    <div className="s-page">
-      <Header title="Mi impacto" />
-      <section className="impact-hero">
-        <p className="eyebrow">Recipientes potencialmente sustituidos</p>
-        <div className="impact-num">{num(subs.length)}</div>
-        <p>Compras en las que el restaurante confirmó que tu recipiente reemplazó a un desechable.</p>
-        <SyntheticTag>Incluye datos sintéticos</SyntheticTag>
+    <div className="s-page impact-page">
+      <header className="impact-head">
+        <p className="eyebrow">Mi impacto{state.me?.demo ? ' · perfil de demostración' : ''}</p>
+        <h1>Tu impacto comienza con cada elección.</h1>
+        <p className="muted">Descubre cómo tus compras con recipiente reutilizable contribuyen a reducir el uso de envases desechables.</p>
+      </header>
+
+      {live.status === 'offline' ? <Notice tone="warn" title="Sin conexión en vivo">Mostramos lo guardado en este dispositivo. Se actualizará al reconectar.</Notice> : null}
+
+      {syncing ? (
+        <section className="impact-hero loading" aria-busy="true"><div className="skeleton w60" /><div className="skeleton big" /><div className="skeleton w80" /></section>
+      ) : empty ? (
+        <section className="impact-hero empty">
+          <p className="eyebrow">Recipientes desechables sustituidos</p>
+          <div className="impact-title">Tu impacto empieza con tu primera compra.</div>
+          <p>Lleva tu topper a un restaurante participante. Cuando el restaurante confirme que no entregó un desechable, aparecerá aquí.</p>
+          <Button variant="secondary" icon="search" onClick={() => go('explore')}>Ver promociones</Button>
+        </section>
+      ) : (
+        <section className="impact-hero">
+          <p className="eyebrow">Recipientes desechables sustituidos</p>
+          <div className="impact-big" key={all.substituted}>{num(all.substituted)}</div>
+          <p>Cada uno es un envase que un restaurante confirmó que <b>no entregó</b> porque usaste tu recipiente. Escanear un código no basta: cuenta solo con compra verificada.</p>
+          {state.me?.demo ? <SyntheticTag>Incluye datos sintéticos</SyntheticTag> : null}
+        </section>
+      )}
+
+      {!empty ? (
+        <section className="goal">
+          <div className="goal-head">
+            {prog.next ? (
+              <><span>Tu próximo objetivo: <b>{prog.next} recipientes sustituidos</b></span><span className="goal-count">{all.substituted} / {prog.next} — te falta{prog.remaining === 1 ? '' : 'n'} {prog.remaining}</span></>
+            ) : <span><b>Completaste todos los hitos.</b> Sigue sumando.</span>}
+          </div>
+          <div className="goal-bar"><i style={{ width: `${(prog.next ? all.substituted / prog.next : 1) * 100}%` }} /></div>
+          <ol className="milestones">
+            {MILESTONES.map((m) => (
+              <li key={m} className={all.substituted >= m ? 'done' : m === prog.next ? 'next' : ''}>
+                <span className="ms-dot">{all.substituted >= m ? <Icon name="check" size={12} stroke={3} /> : null}</span>
+                <span className="ms-label">{m === 1 ? '1ª' : m}</span>
+              </li>
+            ))}
+          </ol>
+          <p className="fine">Los hitos se basan solo en sustituciones confirmadas por restaurantes.</p>
+        </section>
+      ) : null}
+
+      {pending.length ? (
+        <Notice tone="warn" title={`${pending.length} compra${pending.length > 1 ? 's' : ''} pendiente${pending.length > 1 ? 's' : ''} de confirmación`}>
+          Se registraron sin conexión. No suman a tu impacto hasta que el restaurante las confirme.
+        </Notice>
+      ) : null}
+
+      <Segmented small ariaLabel="Periodo" value={period} onChange={setPeriod} options={PERIODS.map((p) => ({ value: p.value, label: p.label }))} />
+
+      <section className="impact-grid">
+        <div className="ig-cell"><span className="ig-label">Compras verificadas con topper</span><b key={per.topperPurchases}>{num(per.topperPurchases)}</b></div>
+        <div className="ig-cell"><span className="ig-label">Residuos de envase evitados</span>
+          {per.massKg != null ? (
+            <><b>{fmtKg(per.massKg)}</b>{per.massCoverage.withoutRef ? <small>estimado sobre {per.massCoverage.withRef} de {per.massCoverage.withRef + per.massCoverage.withoutRef} recipientes</small> : <small>estimado</small>}</>
+          ) : <><b className="pending-val">Pendiente</b><small>{per.substituted ? 'Falta un peso de referencia verificado' : 'Sin sustituciones en el periodo'}</small></>}
+        </div>
+        <div className="ig-cell"><span className="ig-label">Ahorro acumulado</span><b>{money0(per.savings)}</b><small>en el periodo</small></div>
+        <div className="ig-cell"><span className="ig-label">Participación este mes</span><b>{num(month.topperPurchases)}</b><small>compra{month.topperPurchases === 1 ? '' : 's'} verificada{month.topperPurchases === 1 ? '' : 's'}</small></div>
       </section>
 
-      <section className="s-stats">
-        <Stat label="Operaciones verificadas" value={num(accepted)} />
-        <Stat label="Recipientes rechazados" value={num(rejected)} />
-        <Stat label="Semanas seguidas" value={num(streak)} />
+      <section className="panel-lite">
+        <h3 className="h3">Evolución · {PERIODS.find((p) => p.value === period).label}</h3>
+        {per.topperPurchases || period === 'all' ? <ImpactChart points={ser.points} granularity={ser.granularity} /> : <p className="muted small">Sin compras verificadas en este periodo.</p>}
+      </section>
+
+      <section>
+        <h3 className="h3">Historial de impacto</h3>
+        <ul className="impact-list">
+          {mine.slice(0, 12).map((t) => {
+            const n = confirmedSubstitutions(t);
+            const tone = t.status === 'pendiente' ? 'pending' : n ? 'confirmed' : 'none';
+            return (
+              <li key={t.id} className={`il-${tone}`}>
+                <span className="il-count">{t.status === 'pendiente' ? '…' : n ? `+${n}` : '0'}</span>
+                <span className="il-main">
+                  <b>{rest(t.restaurantId)?.name}</b>
+                  <span className="muted">{fmtDate(t.validatedAt || t.createdAt, { day: '2-digit', month: 'short' })}{t.discount && t.status === 'verificada' ? ` · ahorro ${money0(t.discount)}` : ''}{t.synthetic ? ' · sintética' : ''}</span>
+                </span>
+                <span className="il-state">
+                  {t.status === 'pendiente' ? <Badge tone="warn">Pendiente</Badge>
+                    : t.status === 'verificada' ? (n ? <Badge tone="ok">Confirmada</Badge> : <Badge status={t.substitution} />)
+                    : <Badge status={t.status} />}
+                </span>
+              </li>
+            );
+          })}
+          {!mine.length ? <Empty icon="impact" title="Aún no hay registros">Tus compras con recipiente aparecerán aquí.</Empty> : null}
+        </ul>
       </section>
 
       <section className="method">
-        <h3 className="h3">Cómo lo medimos</h3>
-        <ul>
-          <li><b>Operación verificada:</b> el restaurante validó tu código y aceptó tu recipiente.</li>
-          <li><b>Sustitución confirmada:</b> además, el encargado confirmó que no se entregó un desechable.</li>
-          <li><b>No contamos</b> códigos generados, cancelados, vencidos, rechazados ni operaciones pendientes.</li>
-          <li><b>No estimamos emisiones</b> de CO₂: no tenemos todavía una metodología validada para hacerlo.</li>
-        </ul>
+        <button className="method-toggle" onClick={() => setShowMethod((v) => !v)} aria-expanded={showMethod}>
+          <span>¿Cómo calculamos tu impacto?</span><Icon name={showMethod ? 'x' : 'info'} size={16} />
+        </button>
+        {showMethod ? (
+          <div className="method-body">
+            <ul>{METHODOLOGY.map((m) => <li key={m}>{m}</li>)}</ul>
+            <h4>Pesos de referencia usados</h4>
+            {refsUsed.length ? (
+              <ul>{refsUsed.map((r) => <li key={`${r.id}-${r.version}`}><b>{r.type}</b>: {r.grams} g · {r.source || 'sin fuente'}{r.measuredAt ? ` (${r.measuredAt})` : ''} · versión {r.version}</li>)}</ul>
+            ) : <p className="fine">Ninguno: todavía no hay pesos de referencia verificados para tus compras, por eso la masa aparece como pendiente.</p>}
+            <p className="fine">CO₂e: {emissionsEstimate().reason}</p>
+          </div>
+        ) : null}
       </section>
 
       <section className="habit-settings">
@@ -488,17 +648,8 @@ function Impact() {
               onClick={() => toggleDay(d)} disabled={!state.reminders.enabled}>{d}</button>
           ))}
         </div>
-        <p className="fine">En la demo los recordatorios se muestran en Inicio; no se envían notificaciones.</p>
       </section>
 
-      <section className="tips">
-        <h3 className="h3">Hábitos que ayudan</h3>
-        <ul className="ticks">
-          <li><Icon name="check" size={16} />Lava el recipiente al llegar, no al día siguiente.</li>
-          <li><Icon name="check" size={16} />Deja uno en tu mochila o casillero los días de compra.</li>
-          <li><Icon name="check" size={16} />Etiquétalo con tu nombre para no perderlo.</li>
-        </ul>
-      </section>
       <button className="link center" onClick={() => dispatch({ type: 'LOGOUT_USER' })}>Cambiar de usuario en este dispositivo ({state.me?.alias})</button>
     </div>
   );

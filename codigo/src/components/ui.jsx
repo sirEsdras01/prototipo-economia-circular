@@ -55,6 +55,8 @@ const STATUS = {
   confirmada: ['ok', 'Sustitución confirmada'],
   no: ['muted', 'Sin sustitución'],
   no_aplica: ['muted', 'No aplica'],
+  indeterminado: ['muted', 'No determinado'],
+  revertida: ['bad', 'Revertida · no cuenta'],
 };
 
 export function Badge({ tone = 'muted', children, status }) {

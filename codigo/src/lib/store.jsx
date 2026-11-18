@@ -6,16 +6,22 @@ import React, { createContext, useCallback, useContext, useEffect, useReducer, u
 import { buildSeed, PROMOTIONS, RESTAURANTS } from './seed.js';
 import { COMMISSION_RATE, CODE_TTL_MIN, newTxId, round2, decodeCode } from './utils.js';
 import { createSync, roomName } from './sync.js';
+import { DEFAULT_PACKAGING, sanitizeSubstitution, snapshotRef, confirmedSubstitutions } from './impact.js';
 
-const KEY = `demo-economia-circular-v4-${roomName()}`;
-const LISTS = { code: ['codes', 'code'], tx: ['transactions', 'id'], promo: ['promotions', 'id'], user: ['users', 'id'] };
+const KEY = `demo-economia-circular-v5-${roomName()}`;
+const OLD_KEY = `demo-economia-circular-v4-${roomName()}`;
+const LISTS = { code: ['codes', 'code'], tx: ['transactions', 'id'], promo: ['promotions', 'id'], user: ['users', 'id'], pkg: ['packagingRefs', 'id'] };
 const rname = (id) => RESTAURANTS.find((r) => r.id === id)?.name || '';
 
-function freshState(prev) {
+export function freshState(prev) {
   const s = buildSeed();
+  const now = Date.now();
+  // Las referencias de envases configuradas se conservan al reiniciar la demo (son configuración, no actividad).
+  const refs = (prev?.packagingRefs || s.packagingRefs).map((r) => (r.updatedAt ? { ...r, updatedAt: now } : r));
   return {
     ...s,
-    version: 4,
+    packagingRefs: refs,
+    version: 5,
     epoch: prev?.epoch || 'inicio',
     users: [],
     me: prev?.me || null,
@@ -30,7 +36,13 @@ function load() {
     const raw = localStorage.getItem(KEY);
     if (raw) {
       const s = JSON.parse(raw);
-      if (s && s.version === 4) return s;
+      if (s && s.version === 5) return s;
+    }
+    // Migración aditiva desde la versión anterior: se conservan todos los registros.
+    const old = localStorage.getItem(OLD_KEY);
+    if (old) {
+      const s = JSON.parse(old);
+      if (s && s.version === 4) return { ...s, version: 5, packagingRefs: DEFAULT_PACKAGING.map((p) => ({ ...p })) };
     }
   } catch { /* almacenamiento no disponible: se usa memoria */ }
   return freshState();
@@ -80,9 +92,11 @@ function makeTx(state, p) {
     id: newTxId(), code: p.code || null, folio: p.folio || null, promoId: p.promoId, restaurantId: p.restaurantId,
     restaurantName: rname(p.restaurantId), userId: p.userId || null, userAlias: p.userAlias || null,
     validatedBy: state.staff || null, createdAt: now, updatedAt: now, containerAccepted: accepted,
-    substitution: accepted ? (p.substitution || 'no') : 'no_aplica', listPrice, discount, paid,
+    ...sanitizeSubstitution({ containerAccepted: accepted, substitution: p.substitution, substitutedCount: p.substitutedCount }),
+    packagingTypeId: accepted ? (p.packagingTypeId || RESTAURANTS.find((r) => r.id === p.restaurantId)?.packaging || 'otro') : null,
+    packagingRef: null, validatedAt: null, listPrice, discount, paid,
     commission: 0, validationSeconds: p.validationSeconds ?? null, channel: p.channel || 'qr', synthetic: false,
-    note: p.note || '',
+    note: p.note || '', audit: [],
   };
 }
 
@@ -125,6 +139,9 @@ function reducer(state, a) {
       const tx = makeTx(state, { ...a.payload, promoId: c.promoId, userId: c.userId, userAlias: c.userAlias });
       tx.status = tx.containerAccepted ? 'verificada' : 'rechazada';
       tx.commission = tx.status === 'verificada' ? round2(tx.paid * COMMISSION_RATE) : 0;
+      tx.validatedAt = now;
+      tx.packagingRef = tx.substitution === 'confirmada' ? snapshotRef(state.packagingRefs?.find((r) => r.id === tx.packagingTypeId)) : null;
+      tx.audit = [{ at: now, action: tx.status, by: state.staff || 'restaurante', substitution: tx.substitution, count: tx.substitutedCount }];
       if (!tx.containerAccepted) tx.note = 'Recipiente no adecuado: venta sin promoción';
       const done = { ...c, status: tx.containerAccepted ? 'validado' : 'rechazado', txId: tx.id, updatedAt: now };
       delete done.external;
@@ -141,6 +158,7 @@ function reducer(state, a) {
       const known = state.codes.find((x) => x.code === a.payload.code);
       const tx = makeTx(state, { ...a.payload, channel: 'contingencia', userAlias: known?.userAlias, userId: known?.userId });
       tx.status = 'pendiente';
+      tx.audit = [{ at: now, action: 'pendiente', by: state.staff || 'restaurante', substitution: tx.substitution, count: tx.substitutedCount }];
       tx.note = 'Registrada sin conexión. No cuenta como verificada hasta sincronizar.';
       return { ...state, transactions: [tx, ...state.transactions] };
     }
@@ -159,12 +177,32 @@ function reducer(state, a) {
         const ok = t.containerAccepted;
         codes = codes.map((x) => (x.code === c.code ? { ...x, status: ok ? 'validado' : 'rechazado', txId: t.id, updatedAt: now, external: undefined } : x));
         return { ...base, userId: c.userId, userAlias: c.userAlias, promoId: c.promoId, status: ok ? 'verificada' : 'rechazada',
-          commission: ok ? round2(t.paid * COMMISSION_RATE) : 0, note: 'Confirmada al sincronizar (registro de contingencia).' };
+          commission: ok ? round2(t.paid * COMMISSION_RATE) : 0, validatedAt: now,
+          packagingRef: ok && t.substitution === 'confirmada' ? snapshotRef(state.packagingRefs?.find((r) => r.id === t.packagingTypeId)) : null,
+          audit: [...(t.audit || []), { at: now, action: ok ? 'verificada' : 'rechazada', by: 'sincronización' }],
+          note: 'Confirmada al sincronizar (registro de contingencia).' };
       });
       return { ...state, codes, transactions };
     }
+    case 'REVERT_TX': {
+      const t = state.transactions.find((x) => x.id === a.id);
+      if (!t || t.status !== 'verificada') return state; // idempotente: solo se revierte una vez
+      const reason = String(a.reason || 'Sin motivo').slice(0, 120);
+      const next = { ...t, status: 'revertida', commission: 0, revertedAt: now, updatedAt: now, note: `Revertida: ${reason}`,
+        audit: [...(t.audit || []), { at: now, action: 'revertida', by: state.staff || 'restaurante', reason }] };
+      return { ...state, transactions: state.transactions.map((x) => (x.id === a.id ? next : x)) };
+    }
+    case 'SAVE_PKG_REF': {
+      const prev = (state.packagingRefs || []).find((r) => r.id === a.ref.id);
+      const g = Number(a.ref.grams);
+      const grams = Number.isFinite(g) && g > 0 && g < 2000 ? Math.round(g * 10) / 10 : null;
+      const history = prev && prev.version ? [...(prev.history || []), { version: prev.version, grams: prev.grams, source: prev.source, measuredAt: prev.measuredAt, changedAt: now }].slice(-10) : (prev?.history || []);
+      const ref = { ...prev, ...a.ref, grams, source: String(a.ref.source || '').slice(0, 160), notes: String(a.ref.notes || '').slice(0, 200),
+        version: (prev?.version || 0) + 1, updatedAt: Math.max(now, (prev?.updatedAt || 0) + 1), history };
+      return { ...state, packagingRefs: upsert(state.packagingRefs || [], 'id', ref, false) };
+    }
     case 'SAVE_PROMO':
-      return { ...state, promotions: upsert(state.promotions, 'id', { ...a.promo, updatedAt: now }) };
+      return { ...state, promotions: upsert(state.promotions, 'id', { ...a.promo, updatedAt: Math.max(now, (state.promotions.find((p) => p.id === a.promo.id)?.updatedAt || 0) + 1) }) };
     case 'TOGGLE_PROMO':
       return { ...state, promotions: state.promotions.map((p) => (p.id === a.id ? { ...p, active: !p.active, updatedAt: now } : p)) };
     case 'REMOTE_UPSERT': {
@@ -186,6 +224,8 @@ function reducer(state, a) {
       return state;
   }
 }
+
+export { reducer };
 
 const Ctx = createContext(null);
 
@@ -228,16 +268,21 @@ export function StoreProvider({ children }) {
     const k = `${kind}:${data[spec[1]]}`;
     if (!known.current.has(k) || known.current.get(k) < (data.updatedAt || 0)) known.current.set(k, data.updatedAt || 0);
     const s = stateRef.current;
-    if (kind === 'tx' && !s.transactions.some((t) => t.id === data.id) && ['verificada', 'rechazada'].includes(data.status)) {
+    const fresh = (data.updatedAt || 0) > Date.now() - 30000; // no avisar de registros antiguos al conectarse
+    const onQrScreen = kind === 'tx' && data.code && data.code === s.lastCode; // la pantalla del código ya muestra la confirmación
+    if (fresh && kind === 'tx' && !onQrScreen && !s.transactions.some((t) => t.id === data.id) && ['verificada', 'rechazada'].includes(data.status)) {
       const mine = s.me && data.userId === s.me.id;
+      const n = confirmedSubstitutions(data);
       toast({
         tone: data.status === 'verificada' ? 'ok' : 'warn',
-        title: mine ? `${data.restaurantName} validó tu compra` : `${data.restaurantName} registró una compra`,
-        body: `${data.userAlias || 'Alumno'} · ${data.status === 'verificada' ? (data.substitution === 'confirmada' ? 'recipiente sustituyó un desechable' : 'recipiente aceptado') : 'recipiente rechazado'}`,
+        title: mine ? (n ? '¡Tu elección cuenta!' : `${data.restaurantName} validó tu compra`) : `${data.restaurantName} registró una compra`,
+        body: mine
+          ? (n ? `Hoy evitaste ${n} recipiente${n > 1 ? 's' : ''} desechable${n > 1 ? 's' : ''}.` : data.status === 'verificada' ? 'Compra registrada. La sustitución del recipiente no se confirmó.' : 'Recipiente no aceptado.')
+          : `${data.status === 'verificada' ? (n ? `${n} recipiente${n > 1 ? 's' : ''} desechable${n > 1 ? 's' : ''} sustituido${n > 1 ? 's' : ''}` : 'sin sustitución confirmada') : 'recipiente rechazado'}`,
       });
     }
-    if (kind === 'user' && !s.users.some((u) => u.id === data.id) && (!s.me || s.me.id !== data.id)) {
-      toast({ tone: 'info', title: 'Nuevo registro', body: `${data.alias} se registró como estudiante` });
+    if (fresh && kind === 'user' && !data.demo && !s.users.some((u) => u.id === data.id) && (!s.me || s.me.id !== data.id)) {
+      toast({ tone: 'info', title: 'Nuevo registro', body: 'Se registró un estudiante en la demo' });
     }
     rawDispatch({ type: 'REMOTE_UPSERT', kind, data });
   }, [toast]);

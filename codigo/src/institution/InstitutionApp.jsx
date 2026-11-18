@@ -3,7 +3,8 @@ import React, { useMemo, useState } from 'react';
 import { useStore, useNow, livePeers } from '../lib/store.jsx';
 import { RESTAURANTS, SYNTH_USERS } from '../lib/seed.js';
 import { money0, num, pct, weekStart, fmtDate, downloadFile, toCSV } from '../lib/utils.js';
-import { Icon, Stat, Notice, SyntheticTag, BarChart, Legend, Button, Segmented } from '../components/ui.jsx';
+import { summarize, series, periodStart, PERIODS, METHODOLOGY, confirmedSubstitutions, emissionsEstimate } from '../lib/impact.js';
+import { Icon, Stat, Notice, SyntheticTag, BarChart, Legend, Button, Segmented, Field } from '../components/ui.jsx';
 
 const DAY = 86400000;
 const SERIES = [
@@ -25,10 +26,10 @@ function LiveFeed() {
     ...state.transactions.filter((t) => !t.synthetic).map((t) => ({
       ts: t.updatedAt || t.createdAt, icon: t.status === 'verificada' ? 'check' : t.status === 'pendiente' ? 'clock' : 'x',
       tone: t.status === 'verificada' ? 'ok' : t.status === 'pendiente' ? 'warn' : 'bad',
-      text: <><b>{t.restaurantName}</b> {t.status === 'verificada' ? 'validó la compra de' : t.status === 'pendiente' ? 'registró sin conexión a' : t.status === 'duplicada' ? 'bloqueó un duplicado de' : 'rechazó el recipiente de'} <b>{t.userAlias || 'un alumno'}</b>{t.status === 'verificada' && t.substitution === 'confirmada' ? ' · sustituyó un desechable' : ''}</>,
+      text: <><b>{t.restaurantName}</b> {t.status === 'verificada' ? 'validó una compra' : t.status === 'pendiente' ? 'registró una compra sin conexión' : t.status === 'duplicada' ? 'bloqueó un código duplicado' : t.status === 'revertida' ? 'revirtió una compra' : 'rechazó un recipiente'}{t.status === 'verificada' ? (confirmedSubstitutions(t) ? ` · ${confirmedSubstitutions(t)} recipiente${confirmedSubstitutions(t) > 1 ? 's' : ''} sustituido${confirmedSubstitutions(t) > 1 ? 's' : ''}` : ' · sin sustitución confirmada') : ''}</>,
     })),
-    ...state.users.filter((u) => !u.demo).map((u) => ({ ts: u.createdAt, icon: 'users', tone: 'info', text: <><b>{u.alias}</b> se registró{u.career ? ` · ${u.career}` : ''}</> })),
-    ...state.codes.filter((c) => !c.synthetic && !c.external).map((c) => ({ ts: c.createdAt, icon: 'qr', tone: 'muted', text: <><b>{c.userAlias || 'Un alumno'}</b> generó un código en <b>{RESTAURANTS.find((r) => r.id === c.restaurantId)?.name}</b></> })),
+    ...state.users.filter((u) => !u.demo).map((u) => ({ ts: u.createdAt, icon: 'users', tone: 'info', text: <>Se registró un estudiante{u.career ? ` · ${u.career}` : ''}</> })),
+    ...state.codes.filter((c) => !c.synthetic && !c.external).map((c) => ({ ts: c.createdAt, icon: 'qr', tone: 'muted', text: <>Se generó un código en <b>{RESTAURANTS.find((r) => r.id === c.restaurantId)?.name}</b></> })),
   ].sort((a, b) => b.ts - a.ts).slice(0, 9);
   const peers = livePeers(live.peers);
   const count = (k) => peers.filter(([, p]) => p.profile === k).length;
@@ -46,6 +47,130 @@ function LiveFeed() {
         </ul>
       ) : <p className="muted small">Aún no hay actividad en vivo. Escanea el QR de la demo, regístrate como estudiante y valida una compra: aparecerá aquí al instante.</p>}
     </section>
+  );
+}
+
+
+const fmtKg = (kg) => `${kg.toLocaleString('es-MX', { maximumFractionDigits: 2 })} kg`;
+
+function EnvironmentalImpact() {
+  const { state } = useStore();
+  const [period, setPeriod] = useState('30d');
+  const [rid, setRid] = useState('');
+  const [synthetic, setSynthetic] = useState(true);
+  const [gran, setGran] = useState('week');
+  const [editRefs, setEditRefs] = useState(false);
+  const opts = { since: periodStart(period), restaurantId: rid || undefined, includeSynthetic: synthetic };
+  const m = useMemo(() => summarize(state.transactions, opts), [state.transactions, period, rid, synthetic]); // eslint-disable-line react-hooks/exhaustive-deps
+  const ser = useMemo(() => series(state.transactions, { ...opts, period: period === '7d' ? '30d' : period, granularity: gran }), [state.transactions, period, rid, synthetic, gran]); // eslint-disable-line react-hooks/exhaustive-deps
+  const chartData = ser.points.slice(-12).map((p) => ({
+    label: new Date(p.start).toLocaleDateString('es-MX', gran === 'month' ? { month: 'short' } : { day: '2-digit', month: 'short' }).replace('.', ''),
+    s: p.substituted, v: p.purchases,
+  }));
+  const periodLabel = PERIODS.find((p) => p.value === period).label;
+  const exportCsv = () => {
+    const gen = new Date().toISOString();
+    const rows = [
+      { indicador: 'Generado', valor: gen, nota: 'RePack · prototipo de demostración' },
+      { indicador: 'Periodo', valor: periodLabel, nota: rid ? `Establecimiento: ${RESTAURANTS.find((r) => r.id === rid)?.name}` : 'Todos los establecimientos' },
+      { indicador: 'Datos', valor: synthetic ? 'Sintéticos + en vivo' : 'Solo en vivo', nota: 'Los datos sintéticos no son resultados reales' },
+      { indicador: 'Compras verificadas con topper', valor: m.topperPurchases, nota: '' },
+      { indicador: 'Recipientes desechables sustituidos', valor: m.substituted, nota: 'Confirmados por el restaurante' },
+      { indicador: 'Masa estimada de residuos de envase evitada (kg)', valor: m.massKg != null ? m.massKg.toFixed(3) : 'Pendiente', nota: `${m.massCoverage.withRef} recipientes con peso de referencia; ${m.massCoverage.withoutRef} sin peso` },
+      { indicador: 'Usuarios participantes', valor: m.participants, nota: 'Con al menos una compra verificada con topper' },
+      { indicador: 'Usuarios recurrentes', valor: m.recurrent, nota: 'Dos o más compras en el periodo' },
+      { indicador: 'Restaurantes activos', valor: m.activeRestaurants, nota: '' },
+      { indicador: '% de compras con sustitución confirmada', valor: m.confirmedRate == null ? '' : (m.confirmedRate * 100).toFixed(1), nota: '' },
+      { indicador: 'Compras con información ambiental incompleta', valor: m.incomplete, nota: 'No determinada, cantidad heredada o sin peso de referencia' },
+      { indicador: 'Compras pendientes (no cuentan)', valor: m.pending, nota: '' },
+      { indicador: 'Compras revertidas (no cuentan)', valor: m.reverted, nota: '' },
+      { indicador: 'CO2e evitado', valor: 'No calculado', nota: emissionsEstimate().reason },
+      ...METHODOLOGY.map((t, i) => ({ indicador: `Metodología ${i + 1}`, valor: '', nota: t })),
+    ];
+    downloadFile(`repack_impacto_ambiental_${period}.csv`, toCSV(rows));
+  };
+  return (
+    <section className="panel env">
+      <div className="panel-head">
+        <div><p className="eyebrow">Impacto ambiental colectivo · datos agregados</p><h2>Recipientes desechables sustituidos</h2></div>
+        <div className="row gap wrap">
+          <Segmented small ariaLabel="Periodo" value={period} onChange={setPeriod} options={PERIODS.map((p) => ({ value: p.value, label: p.label }))} />
+          <select className="mini-select" value={rid} onChange={(e) => setRid(e.target.value)} aria-label="Establecimiento">
+            <option value="">Todos los establecimientos</option>
+            {RESTAURANTS.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+          </select>
+          <label className="switch-row compact"><span>Incluir sintéticos</span><input type="checkbox" role="switch" checked={synthetic} onChange={(e) => setSynthetic(e.target.checked)} /></label>
+          <Button variant="secondary" icon="download" onClick={exportCsv}>CSV</Button>
+        </div>
+      </div>
+      <div className="env-hero">
+        <div className="env-big"><b key={m.substituted}>{num(m.substituted)}</b><span>recipientes desechables sustituidos · {periodLabel.toLowerCase()}</span></div>
+        <div className="env-kpis">
+          <div><span>Compras verificadas con topper</span><b>{num(m.topperPurchases)}</b></div>
+          <div><span>Residuos de envase evitados</span>{m.massKg != null ? <b>{fmtKg(m.massKg)}</b> : <b className="pending-val">Pendiente</b>}<small>{m.massKg != null ? `${m.massCoverage.withRef} de ${m.massCoverage.withRef + m.massCoverage.withoutRef} recipientes con peso` : 'Sin peso de referencia verificado'}</small></div>
+          <div><span>% con sustitución confirmada</span><b>{m.confirmedRate == null ? '—' : pct(m.confirmedRate)}</b></div>
+          <div><span>Usuarios participantes</span><b>{num(m.participants)}</b><small>{num(m.recurrent)} recurrentes</small></div>
+          <div><span>Restaurantes activos</span><b>{num(m.activeRestaurants)}</b></div>
+          <div><span>Información ambiental incompleta</span><b>{num(m.incomplete)}</b><small>compras</small></div>
+        </div>
+      </div>
+      <div className="panel-head">
+        <h3 className="h3" style={{ margin: 0 }}>Evolución</h3>
+        <div className="row gap"><Segmented small ariaLabel="Agrupar" value={gran} onChange={setGran} options={[{ value: 'week', label: 'Semanal' }, { value: 'month', label: 'Mensual' }]} /><Legend series={ENV_SERIES} /></div>
+      </div>
+      <BarChart data={chartData} series={ENV_SERIES} height={190} />
+      <div className="env-foot">
+        <p className="fine">Solo datos agregados: el panel institucional no muestra historiales individuales. CO₂e no calculado: {emissionsEstimate().reason}</p>
+        <button className="link" onClick={() => setEditRefs((v) => !v)}>{editRefs ? 'Cerrar referencias de envases' : 'Referencias de envases (pesos)'}</button>
+      </div>
+      {editRefs ? <PackagingRefs /> : null}
+    </section>
+  );
+}
+
+const ENV_SERIES = [
+  { key: 's', label: 'Recipientes sustituidos', color: '#173D32' },
+  { key: 'v', label: 'Compras con topper', color: '#C9DCCF' },
+];
+
+function PackagingRefs() {
+  const { state, dispatch } = useStore();
+  const [edit, setEdit] = useState(null);
+  const refs = state.packagingRefs || [];
+  const valid = edit && (edit.grams === '' || (Number(edit.grams) > 0 && Number(edit.grams) < 2000)) && (edit.grams === '' || edit.source.trim().length >= 3);
+  return (
+    <div className="refs">
+      <Notice tone="info" title="Pesos de referencia">Sin un peso verificado la masa queda pendiente. Captura solo pesos medidos o documentados, con su fuente. Cada cambio crea una versión; las compras ya validadas conservan la versión que usaron.</Notice>
+      <div className="table-wrap">
+        <table className="table">
+          <thead><tr><th>Tipo de envase</th><th className="r">Peso (g)</th><th>Fuente</th><th>Medición</th><th>Vigencia</th><th className="r">Versión</th><th></th></tr></thead>
+          <tbody>
+            {refs.map((r) => (
+              <tr key={r.id}>
+                <td><b>{r.type}</b>{r.notes ? <div className="tiny">{r.notes}</div> : null}</td>
+                <td className="r">{r.grams ? r.grams : <span className="tiny">Sin configurar</span>}</td>
+                <td>{r.source || '—'}</td><td>{r.measuredAt || '—'}</td><td>{r.validUntil || '—'}</td>
+                <td className="r">{r.version || 0}</td>
+                <td className="r"><button className="link" onClick={() => setEdit({ ...r, grams: r.grams ?? '', source: r.source || '', measuredAt: r.measuredAt || '', validUntil: r.validUntil || '', notes: r.notes || '' })}>Editar</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {edit ? (
+        <form className="ref-form" onSubmit={(e) => { e.preventDefault(); if (!valid) return; dispatch({ type: 'SAVE_PKG_REF', ref: { ...edit, grams: edit.grams === '' ? null : Number(edit.grams) } }); setEdit(null); }}>
+          <b>{edit.type}</b>
+          <div className="form-grid">
+            <Field label="Peso por envase (g)" hint="Vacío = sin configurar"><input type="number" step="0.1" min="0" value={edit.grams} onChange={(e) => setEdit({ ...edit, grams: e.target.value })} /></Field>
+            <Field label="Fuente de medición" hint="Obligatoria si hay peso"><input value={edit.source} onChange={(e) => setEdit({ ...edit, source: e.target.value })} placeholder="Ej. Pesaje propio de 10 envases, báscula de cocina" /></Field>
+            <Field label="Fecha de medición"><input type="date" value={edit.measuredAt} onChange={(e) => setEdit({ ...edit, measuredAt: e.target.value })} /></Field>
+            <Field label="Vigente hasta"><input type="date" value={edit.validUntil} onChange={(e) => setEdit({ ...edit, validUntil: e.target.value })} /></Field>
+            <Field label="Observaciones"><input value={edit.notes} onChange={(e) => setEdit({ ...edit, notes: e.target.value })} /></Field>
+          </div>
+          <div className="row gap"><Button variant="secondary" type="button" onClick={() => setEdit(null)}>Cancelar</Button><Button type="submit" icon="check" disabled={!valid}>Guardar versión</Button></div>
+        </form>
+      ) : null}
+    </div>
   );
 }
 
@@ -139,6 +264,8 @@ export default function InstitutionApp() {
         Las cifras combinan datos sintéticos con lo que registran en vivo los participantes de esta demo. Ningún dato es un resultado real de campo.
       </Notice>
 
+      <EnvironmentalImpact />
+
       <LiveFeed />
 
       <div className="stat-grid">
@@ -146,7 +273,7 @@ export default function InstitutionApp() {
         <Stat label="Usuarios activos (30 días)" value={num(m.active30)} hint="Al menos una compra verificada" />
         <Stat label="Restaurantes participantes" value={num(m.restaurants)} hint="Con promoción activa" />
         <Stat label="Compras elegibles verificadas" value={num(m.v.length)} />
-        <Stat label="Sustituciones confirmadas" value={num(m.subs.length)} hint={`${pct(m.v.length ? m.subs.length / m.v.length : 0)} de las verificadas`} tone="accent" />
+        <Stat label="Compras con sustitución confirmada" value={num(m.subs.length)} hint={`${pct(m.v.length ? m.subs.length / m.v.length : 0)} de las verificadas`} tone="accent" />
         <Stat label="Recipientes rechazados" value={num(m.rejected)} />
       </div>
 

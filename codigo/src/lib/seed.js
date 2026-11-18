@@ -3,21 +3,22 @@
 // No representan establecimientos reales, participantes confirmados ni resultados de campo.
 
 import { COMMISSION_RATE, round2 } from './utils.js';
+import { DEFAULT_PACKAGING } from './impact.js';
 
 export const DEMO_USER = { id: 'u-demo', name: 'Ana', role: 'Estudiante (perfil de demostración)' };
 
 export const RESTAURANTS = [
-  { id: 'r1', name: 'Cocina Ceiba', cuisine: 'Comida corrida', walk: '4 min', pin: '1111',
+  { id: 'r1', packaging: 'plastico', name: 'Cocina Ceiba', cuisine: 'Comida corrida', walk: '4 min', pin: '1111',
     accepts: 'Recipiente rígido con tapa hermética, mínimo 1 L' },
-  { id: 'r2', name: 'Bowl Norte', cuisine: 'Bowls y ensaladas', walk: '6 min', pin: '2222',
+  { id: 'r2', packaging: 'fibra', name: 'Bowl Norte', cuisine: 'Bowls y ensaladas', walk: '6 min', pin: '2222',
     accepts: 'Recipiente rígido con tapa, mínimo 750 ml' },
-  { id: 'r3', name: 'Taquería El Andén', cuisine: 'Tacos', walk: '3 min', pin: '3333',
+  { id: 'r3', packaging: 'plastico', name: 'Taquería El Andén', cuisine: 'Tacos', walk: '3 min', pin: '3333',
     accepts: 'Recipiente con tapa; separadores opcionales' },
-  { id: 'r4', name: 'Café Lumbre', cuisine: 'Café y panadería', walk: '5 min', pin: '4444',
+  { id: 'r4', packaging: 'vaso', name: 'Café Lumbre', cuisine: 'Café y panadería', walk: '5 min', pin: '4444',
     accepts: 'Termo o vaso con tapa, 350–500 ml' },
-  { id: 'r5', name: 'Wok 27', cuisine: 'Asiática', walk: '8 min', pin: '5555',
+  { id: 'r5', packaging: 'carton', name: 'Wok 27', cuisine: 'Asiática', walk: '8 min', pin: '5555',
     accepts: 'Recipiente apto para alimentos calientes, con tapa' },
-  { id: 'r6', name: 'La Parrilla del Patio', cuisine: 'Parrilla', walk: '7 min', pin: '6666',
+  { id: 'r6', packaging: 'plastico', name: 'La Parrilla del Patio', cuisine: 'Parrilla', walk: '7 min', pin: '6666',
     accepts: 'Recipiente rígido con tapa hermética, mínimo 1 L' },
 ];
 
@@ -78,7 +79,9 @@ export function buildSeed(now = Date.now()) {
       const ts = now - w * 7 * DAY - Math.floor(r() * 5) * DAY - Math.floor(r() * 8 * 3600000) - 3600000;
       const userId = i % 9 === 0 && w < 6 ? 'u-demo-x' : `u-${String(1 + Math.floor(r() * SYNTH_USERS)).padStart(3, '0')}`;
       const accepted = r() > 0.07;
-      const substitution = accepted ? (r() > 0.13 ? 'confirmada' : 'no') : 'no_aplica';
+      const q = r();
+      const substitution = accepted ? (q < 0.8 ? 'confirmada' : q < 0.93 ? 'no' : 'indeterminado') : 'no_aplica';
+      const substitutedCount = substitution === 'confirmada' ? (promo.id === 'p1' && r() < 0.25 ? 2 : 1) : 0;
       const paid = accepted ? promo.price - promo.discount : promo.price;
       const code = `DT-S${String(++n).padStart(3, '0')}-SY`;
       codes.push({ code, promoId: promo.id, restaurantId: promo.restaurantId, userId, createdAt: ts - 600000,
@@ -86,7 +89,8 @@ export function buildSeed(now = Date.now()) {
       tx.push({
         id: `TX-S${String(n).padStart(4, '0')}`, code, folio: null, promoId: promo.id, restaurantId: promo.restaurantId,
         userId, createdAt: ts, status: accepted ? 'verificada' : 'rechazada', containerAccepted: accepted, substitution,
-        listPrice: promo.price, discount: accepted ? promo.discount : 0, paid,
+        substitutedCount, packagingTypeId: RESTAURANTS.find((x) => x.id === promo.restaurantId).packaging, packagingRef: null,
+        validatedAt: ts, listPrice: promo.price, discount: accepted ? promo.discount : 0, paid,
         commission: accepted ? round2(paid * COMMISSION_RATE) : 0,
         validationSeconds: Math.round(14 + r() * 30), channel: 'qr', synthetic: true,
         note: accepted ? '' : 'Recipiente no adecuado: venta sin promoción',
@@ -94,10 +98,21 @@ export function buildSeed(now = Date.now()) {
     }
   }
   // Historial del usuario de demostración (sintético): reasignamos algunas operaciones a "Ana".
-  tx.filter((t) => t.userId === 'u-demo-x').slice(-7).forEach((t) => { t.userId = 'u-demo'; });
+  // Historial sintético del perfil de demostración "Ana": 7 compras verificadas y 8 recipientes
+  // sustituidos, para mostrar el progreso hacia el siguiente hito (10).
+  tx.filter((t) => t.userId === 'u-demo-x').slice(-7).forEach((t, k) => {
+    const promo = PROMOTIONS.find((p) => p.id === t.promoId);
+    t.userId = 'u-demo'; t.userAlias = 'Ana';
+    t.status = 'verificada'; t.containerAccepted = true; t.substitution = 'confirmada'; t.substitutedCount = k === 2 ? 2 : 1;
+    t.discount = promo.discount; t.paid = promo.price - promo.discount; t.commission = round2(t.paid * COMMISSION_RATE); t.note = '';
+  });
   tx.forEach((t) => { if (t.userId === 'u-demo-x') t.userId = 'u-001'; });
   const byCode = new Map(tx.map((t) => [t.code, t.userId]));
-  codes.forEach((c) => { c.userId = byCode.get(c.code) || c.userId; });
+  codes.forEach((c) => {
+    c.userId = byCode.get(c.code) || c.userId;
+    const t = tx.find((x) => x.code === c.code);
+    if (t) c.status = t.status === 'verificada' ? 'validado' : 'rechazado';
+  });
 
   return {
     version: 3,
@@ -108,5 +123,6 @@ export function buildSeed(now = Date.now()) {
     reminders: { enabled: true, days: ['Mar', 'Jue'] },
     lastCode: null,
     restaurantSession: null,
+    packagingRefs: DEFAULT_PACKAGING.map((p) => ({ ...p })),
   };
 }

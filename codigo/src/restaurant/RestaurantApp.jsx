@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore, checkCode, codeStatus } from '../lib/store.jsx';
 import { RESTAURANTS, PROMOTIONS } from '../lib/seed.js';
 import jsQR from 'jsqr';
+import { MAX_SUBSTITUTED, confirmedSubstitutions, substitutedCountOf } from '../lib/impact.js';
 import {
   money, money0, num, pct, fmtDateTime, normalizeCode, newFolio, contribution, COMMISSION_RATE, round2, weekStart,
   fmtDate, downloadFile, toCSV, decodeCode,
@@ -115,16 +116,17 @@ function useRestaurantStats(rid, days = 30) {
     const recent = all.filter((t) => t.createdAt >= since);
     const v = recent.filter((t) => t.status === 'verificada');
     const subs = v.filter((t) => t.substitution === 'confirmada');
+    const substituted = v.reduce((n, t) => n + confirmedSubstitutions(t), 0);
     const times = v.map((t) => t.validationSeconds).filter((x) => x != null).sort((a, b) => a - b);
     const median = times.length ? times[Math.floor(times.length / 2)] : null;
     const weeks = [];
     for (let i = 7; i >= 0; i--) {
       const ws = weekStart(Date.now()) - i * 7 * DAY;
       const inW = all.filter((t) => t.status === 'verificada' && weekStart(t.createdAt) === ws);
-      weeks.push({ label: fmtDate(ws, { day: '2-digit', month: 'short' }).replace('.', ''), v: inW.length, s: inW.filter((t) => t.substitution === 'confirmada').length });
+      weeks.push({ label: fmtDate(ws, { day: '2-digit', month: 'short' }).replace('.', ''), v: inW.length, s: inW.reduce((n, t) => n + confirmedSubstitutions(t), 0) });
     }
     return {
-      all, verified: v.length, subs: subs.length, revenue: v.reduce((s, t) => s + t.paid, 0),
+      all, verified: v.length, subs: substituted, revenue: v.reduce((s, t) => s + t.paid, 0),
       discounts: v.reduce((s, t) => s + t.discount, 0), commission: v.reduce((s, t) => s + t.commission, 0),
       rejected: recent.filter((t) => t.status === 'rechazada').length, median, weeks,
     };
@@ -143,7 +145,7 @@ function Overview({ rid }) {
       </div>
       <div className="stat-grid">
         <Stat label="Compras verificadas" value={num(s.verified)} />
-        <Stat label="Sustituciones confirmadas" value={num(s.subs)} hint="Desechables no entregados, según confirmación del encargado" />
+        <Stat label="Recipientes desechables sustituidos" value={num(s.subs)} hint="Confirmados por el encargado" />
         <Stat label="Ingresos atribuidos a promociones" value={money0(s.revenue)} hint="Importe pagado en compras verificadas" />
         <Stat label="Descuentos otorgados" value={money0(s.discounts)} hint="Financiados por el restaurante" />
         <Stat label={`Comisión de plataforma (${pct(COMMISSION_RATE)})`} value={money(s.commission)} hint="Solo sobre compras elegibles verificadas" />
@@ -165,7 +167,7 @@ function Overview({ rid }) {
 
 const SERIES = [
   { key: 'v', label: 'Compras verificadas', color: '#173D32' },
-  { key: 's', label: 'Sustituciones confirmadas', color: '#8DB5A0' },
+  { key: 's', label: 'Recipientes sustituidos', color: '#8DB5A0' },
 ];
 
 // Escáner con cámara si el navegador soporta BarcodeDetector; si no, entrada manual.
@@ -263,11 +265,15 @@ function Validate({ rid }) {
   const [ctx, setCtx] = useState(null); // { code, promo, offline, startedAt }
   const [accepted, setAccepted] = useState(null);
   const [subst, setSubst] = useState(null);
+  const [count, setCount] = useState(1);
+  const defaultPkg = RESTAURANTS.find((x) => x.id === rid)?.packaging || 'otro';
+  const [pkg, setPkg] = useState(defaultPkg);
+  const refs = state.packagingRefs || [];
   const [listPrice, setListPrice] = useState(0);
   const [offlinePromo, setOfflinePromo] = useState(myPromos[0]?.id);
   const [result, setResult] = useState(null);
 
-  const reset = () => { setStep('code'); setInput(''); setError(null); setCtx(null); setAccepted(null); setSubst(null); setResult(null); };
+  const reset = () => { setStep('code'); setInput(''); setError(null); setCtx(null); setAccepted(null); setSubst(null); setCount(1); setPkg(defaultPkg); setResult(null); };
 
   const lookup = (raw) => {
     const code = normalizeCode(raw ?? input);
@@ -298,7 +304,8 @@ function Validate({ rid }) {
   const register = () => {
     const seconds = Math.max(1, Math.round((Date.now() - ctx.startedAt) / 1000));
     const payload = { code: ctx.code, restaurantId: rid, promoId: ctx.promo.id, containerAccepted: accepted,
-      substitution: accepted ? subst : 'no_aplica', listPrice: Number(listPrice), discount: ctx.promo.discount, validationSeconds: seconds };
+      substitution: accepted ? subst : 'no_aplica', substitutedCount: accepted && subst === 'confirmada' ? count : 0,
+      packagingTypeId: accepted ? pkg : null, listPrice: Number(listPrice), discount: ctx.promo.discount, validationSeconds: seconds };
     if (ctx.offline) {
       const folio = newFolio();
       dispatch({ type: 'REGISTER_PENDING', payload: { ...payload, folio } });
@@ -372,7 +379,7 @@ function Validate({ rid }) {
             {ctx.offline ? <Badge tone="warn">Sin verificar</Badge> : <Badge tone="ok">Código válido</Badge>}
             <span className="muted">{ctx.promo.title} · {money0(ctx.promo.price)} − {money0(ctx.promo.discount)}</span>
           </div>
-          <h2 className="q">¿El cliente presentó un recipiente propio, limpio y adecuado para este platillo?</h2>
+          <h2 className="q">¿Se utilizó un recipiente reutilizable propio, limpio y adecuado?</h2>
           <p className="muted">Criterio del restaurante: {RESTAURANTS.find((x) => x.id === rid).accepts}.</p>
           <div className="choice">
             <button className={accepted === true ? 'on ok' : ''} onClick={() => setAccepted(true)}><Icon name="check" size={20} />Sí, lo acepto</button>
@@ -380,11 +387,30 @@ function Validate({ rid }) {
           </div>
           {accepted === true ? (
             <>
-              <h2 className="q">¿Este recipiente reemplazó un desechable que normalmente habrías entregado?</h2>
-              <div className="choice">
-                <button className={subst === 'confirmada' ? 'on ok' : ''} onClick={() => setSubst('confirmada')}><Icon name="check" size={20} />Sí, no se entregó desechable</button>
-                <button className={subst === 'no' ? 'on' : ''} onClick={() => setSubst('no')}><Icon name="info" size={20} />No / se entregó algún desechable</button>
+              <h2 className="q">¿Se evitó entregar un recipiente desechable que normalmente se habría usado?</h2>
+              <div className="choice three">
+                <button className={subst === 'confirmada' ? 'on ok' : ''} onClick={() => setSubst('confirmada')}><Icon name="check" size={20} />Sí, se evitó</button>
+                <button className={subst === 'no' ? 'on' : ''} onClick={() => setSubst('no')}><Icon name="x" size={20} />No</button>
+                <button className={subst === 'indeterminado' ? 'on' : ''} onClick={() => setSubst('indeterminado')}><Icon name="info" size={20} />No se puede determinar</button>
               </div>
+              {subst === 'confirmada' ? (
+                <div className="subst-detail">
+                  <div>
+                    <span className="field-label">¿Cuántos recipientes se sustituyeron?</span>
+                    <div className="stepper-num" role="group" aria-label="Cantidad de recipientes sustituidos">
+                      <button type="button" aria-label="Uno menos" disabled={count <= 1} onClick={() => setCount((n) => Math.max(1, n - 1))}>−</button>
+                      <output aria-live="polite">{count}</output>
+                      <button type="button" aria-label="Uno más" disabled={count >= MAX_SUBSTITUTED} onClick={() => setCount((n) => Math.min(MAX_SUBSTITUTED, n + 1))}>+</button>
+                    </div>
+                  </div>
+                  <Field label="Tipo de envase que se habría entregado">
+                    <select value={pkg} onChange={(e) => setPkg(e.target.value)}>
+                      {refs.map((r) => <option key={r.id} value={r.id}>{r.type}</option>)}
+                    </select>
+                  </Field>
+                </div>
+              ) : null}
+              {subst === 'indeterminado' ? <p className="fine">No se contará como recipiente sustituido.</p> : null}
             </>
           ) : null}
           {accepted === false ? <Notice tone="warn">La compra puede continuar sin promoción. No genera comisión y no cuenta como reutilización.</Notice> : null}
@@ -406,7 +432,7 @@ function Validate({ rid }) {
               <div><dt>Descuento por recipiente propio</dt><dd>{accepted ? `−${money(discount)}` : 'No aplica'}</dd></div>
               <div className="total"><dt>Cobrar al cliente</dt><dd>{money(paid)}</dd></div>
               <div><dt>Comisión de plataforma ({pct(COMMISSION_RATE)})</dt><dd>{ctx.offline ? 'Se calcula al confirmar' : money(commission)}</dd></div>
-              <div><dt>Recipiente</dt><dd>{accepted ? (subst === 'confirmada' ? 'Sustitución confirmada' : 'Aceptado, sin sustitución') : 'Rechazado'}</dd></div>
+              <div><dt>Recipiente</dt><dd>{accepted ? (subst === 'confirmada' ? `${count} desechable${count > 1 ? 's' : ''} sustituido${count > 1 ? 's' : ''}` : subst === 'no' ? 'Aceptado, sin sustitución' : 'Aceptado, sustitución no determinada') : 'Rechazado'}</dd></div>
             </dl>
           </div>
           <p className="fine">El descuento lo decide y financia el restaurante. La plataforma no cobra mensualidad durante el piloto propuesto.</p>
@@ -424,7 +450,7 @@ function Validate({ rid }) {
           {result.offline ? (
             <p>Folio <b className="mono">{result.folio}</b>. Se confirmará o rechazará al sincronizar. No cuenta en los indicadores mientras esté pendiente.</p>
           ) : (
-            <p>{ctx.alias ? <><b>{ctx.alias}</b> · </> : null}{accepted ? `Cobro de ${money(paid)} · comisión ${money(commission)} · ${subst === 'confirmada' ? 'sustitución confirmada' : 'sin sustitución confirmada'}.` : 'El código quedó cerrado; el cliente puede generar uno nuevo en otra visita.'}</p>
+            <p>{ctx.alias ? <><b>{ctx.alias}</b> · </> : null}{accepted ? `Cobro de ${money(paid)} · comisión ${money(commission)} · ${subst === 'confirmada' ? `${count} recipiente${count > 1 ? 's' : ''} desechable${count > 1 ? 's' : ''} sustituido${count > 1 ? 's' : ''}` : 'sin sustitución confirmada'}.` : 'El código quedó cerrado; el cliente puede generar uno nuevo en otra visita.'}</p>
           )}
           <p className="muted">Tiempo de validación: {result.seconds} s{!result.offline ? ' · enviado al alumno y al panel institucional' : ''}</p>
           <Button icon="qr" onClick={reset}>Validar otra compra</Button>
@@ -511,14 +537,18 @@ function PromoEditor({ promo, onCancel, onSave }) {
   );
 }
 
+const REVERT_REASONS = ['Error de registro', 'Devolución o cancelación del pedido', 'El cliente no usó recipiente propio'];
+
 function HistoryTable({ rid }) {
-  const { state } = useStore();
+  const { state, dispatch } = useStore();
+  const [revert, setRevert] = useState(null);
   const [f, setF] = useState('todas');
   const rows = state.transactions.filter((t) => t.restaurantId === rid && (f === 'todas' || t.status === f));
   const promoName = (id) => state.promotions.find((p) => p.id === id)?.title || '—';
   const exportCsv = () => downloadFile(`historial_${rid}_demo.csv`, toCSV(rows.map((t) => ({
     fecha: new Date(t.createdAt).toISOString(), id: t.id, folio: t.folio || '', codigo: t.code || '', promocion: promoName(t.promoId),
-    estado: t.status, recipiente_aceptado: t.containerAccepted ? 'si' : 'no', sustitucion: t.substitution, precio_lista: t.listPrice,
+    estado: t.status, recipiente_aceptado: t.containerAccepted ? 'si' : 'no', sustitucion: t.substitution, recipientes_sustituidos: confirmedSubstitutions(t),
+    tipo_envase: t.packagingTypeId || '', precio_lista: t.listPrice,
     descuento: t.discount, pagado: t.paid, comision: t.commission, segundos_validacion: t.validationSeconds ?? '', canal: t.channel,
     sintetico: t.synthetic ? 'si' : 'no', nota: t.note || '',
   }))));
@@ -530,10 +560,10 @@ function HistoryTable({ rid }) {
       </div>
       <Segmented small ariaLabel="Filtrar estado" value={f} onChange={setF} options={[
         { value: 'todas', label: 'Todas' }, { value: 'verificada', label: 'Verificadas' }, { value: 'pendiente', label: 'Pendientes' },
-        { value: 'rechazada', label: 'Rechazadas' }, { value: 'duplicada', label: 'Duplicadas' }]} />
+        { value: 'rechazada', label: 'Rechazadas' }, { value: 'duplicada', label: 'Duplicadas' }, { value: 'revertida', label: 'Revertidas' }]} />
       <div className="table-wrap">
         <table className="table">
-          <thead><tr><th>Fecha</th><th>Operación</th><th>Promoción</th><th>Estado</th><th>Recipiente</th><th className="r">Pagado</th><th className="r">Descuento</th><th className="r">Comisión</th></tr></thead>
+          <thead><tr><th>Fecha</th><th>Operación</th><th>Promoción</th><th>Estado</th><th>Recipiente</th><th className="r">Pagado</th><th className="r">Descuento</th><th className="r">Comisión</th><th></th></tr></thead>
           <tbody>
             {rows.slice(0, 80).map((t) => (
               <tr key={t.id}>
@@ -541,10 +571,19 @@ function HistoryTable({ rid }) {
                 <td><span className="mono">{t.folio || t.id}</span>{t.synthetic ? <span className="tiny"> sintética</span> : null}{t.note ? <div className="tiny">{t.note}</div> : null}</td>
                 <td>{promoName(t.promoId)}</td>
                 <td><Badge status={t.status} /></td>
-                <td>{t.status === 'verificada' ? <Badge status={t.substitution} /> : t.status === 'pendiente' ? <Badge tone="warn">Por confirmar</Badge> : <Badge status="no_aplica" />}</td>
+                <td>{t.status === 'verificada' ? (t.substitution === 'confirmada' ? <Badge tone="ok">{substitutedCountOf(t)} sustituido{substitutedCountOf(t) > 1 ? 's' : ''}</Badge> : <Badge status={t.substitution} />) : t.status === 'pendiente' ? <Badge tone="warn">Por confirmar</Badge> : <Badge status="no_aplica" />}</td>
                 <td className="r">{money(t.paid)}</td>
                 <td className="r">{t.discount ? `−${money(t.discount)}` : '—'}</td>
                 <td className="r">{t.commission ? money(t.commission) : '—'}</td>
+                <td className="r">
+                  {t.status === 'verificada' && revert !== t.id ? <button className="link" onClick={() => setRevert(t.id)}>Revertir</button> : null}
+                  {revert === t.id ? (
+                    <div className="revert-box">
+                      {REVERT_REASONS.map((r) => <button key={r} className="link" onClick={() => { dispatch({ type: 'REVERT_TX', id: t.id, reason: r }); setRevert(null); }}>{r}</button>)}
+                      <button className="link muted" onClick={() => setRevert(null)}>Cancelar</button>
+                    </div>
+                  ) : null}
+                </td>
               </tr>
             ))}
           </tbody>

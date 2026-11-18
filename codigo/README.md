@@ -1,4 +1,4 @@
-# Prototipo · Plataforma de reutilización para Distrito Tec
+# RePack · Prototipo para Distrito Tec
 
 > Nombre provisional. Prototipo de demostración para conversación con expertos.
 > Todos los restaurantes, usuarios, promociones y cifras son **sintéticos**.
@@ -83,3 +83,7 @@ src/
 ```
 
 Pila: React 18 + Vite 5, `qrcode` para generar QR, Inter empaquetada localmente (sin servicios externos).
+
+
+## Módulo de impacto ambiental
+Ver [IMPACTO_AMBIENTAL.md](IMPACTO_AMBIENTAL.md). Pruebas: `npm test`.
