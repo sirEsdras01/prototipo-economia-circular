@@ -29,6 +29,7 @@ const PATHS = {
   refresh: 'M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7',
   camera: 'M4 7h3l2-3h6l2 3h3v12H4zM12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8z',
   shield: 'M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z',
+  live: 'M12 12m-2 0a2 2 0 1 0 4 0a2 2 0 1 0-4 0M7.8 7.8a6 6 0 0 0 0 8.4M16.2 16.2a6 6 0 0 0 0-8.4M4.9 4.9a10 10 0 0 0 0 14.2M19.1 19.1a10 10 0 0 0 0-14.2',
   users: 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM2 21a7 7 0 0 1 14 0M16 3.5a4 4 0 0 1 0 7.5M18 14a6 6 0 0 1 4 7',
 };
 
@@ -69,7 +70,7 @@ export function Stat({ label, value, hint, tone }) {
   return (
     <div className={`stat ${tone ? `stat-${tone}` : ''}`}>
       <div className="stat-label">{label}</div>
-      <div className="stat-value">{value}</div>
+      <div className="stat-value" key={String(value)}>{value}</div>
       {hint ? <div className="stat-hint">{hint}</div> : null}
     </div>
   );

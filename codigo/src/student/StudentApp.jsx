@@ -7,7 +7,58 @@ import { Icon, Badge, Button, Notice, QR, SyntheticTag, Stat, Segmented, Empty }
 
 const rest = (id) => RESTAURANTS.find((r) => r.id === id);
 
+function Register() {
+  const { dispatch } = useStore();
+  const [alias, setAlias] = useState('');
+  const [career, setCareer] = useState('');
+  const [ok, setOk] = useState(false);
+  const clean = alias.trim().replace(/\s+/g, ' ');
+  const valid = clean.length >= 2 && clean.length <= 24 && ok;
+  const register = (e) => {
+    e.preventDefault();
+    if (!valid) return;
+    const now = Date.now();
+    const id = 'u-' + Math.random().toString(36).slice(2, 10);
+    dispatch({ type: 'REGISTER_USER', user: { id, alias: clean, career: career.trim().slice(0, 40), createdAt: now, updatedAt: now } });
+  };
+  const demo = () => {
+    const now = Date.now();
+    dispatch({ type: 'REGISTER_USER', user: { id: DEMO_USER.id, alias: DEMO_USER.name, career: 'Perfil de demostración', demo: true, createdAt: now, updatedAt: now } });
+  };
+  return (
+    <form className="s-page register" onSubmit={register}>
+      <div className="register-mark" aria-hidden="true"><Icon name="container" size={30} /></div>
+      <div>
+        <p className="eyebrow">Distrito Tec · demostración en vivo</p>
+        <h1 className="register-title">Regístrate para participar</h1>
+        <p className="muted">Tu registro y tus compras aparecen al instante en el panel del restaurante y en el institucional.</p>
+      </div>
+      <label className="field"><span className="field-label">¿Cómo te llamamos?</span>
+        <span className="field-control"><input value={alias} onChange={(e) => setAlias(e.target.value)} placeholder="Ej. Luis R." maxLength={24} autoComplete="nickname" /></span>
+        <span className="field-hint">Usa un apodo o tu nombre de pila. No escribas datos sensibles.</span>
+      </label>
+      <label className="field"><span className="field-label">Carrera o área (opcional)</span>
+        <span className="field-control"><input value={career} onChange={(e) => setCareer(e.target.value)} placeholder="Ej. IDM, juez, colaborador" maxLength={40} /></span>
+      </label>
+      <label className="check">
+        <input type="checkbox" checked={ok} onChange={(e) => setOk(e.target.checked)} />
+        <span>Entiendo que es una demo pública: lo que registre lo verán otros participantes.</span>
+      </label>
+      <Button type="submit" icon="arrowRight" disabled={!valid}>Registrarme</Button>
+      <button type="button" className="link center" onClick={demo}>Entrar con el perfil de demostración (Ana)</button>
+    </form>
+  );
+}
+
 export default function StudentApp() {
+  const { state } = useStore();
+  if (!state.me) {
+    return <div className="phone-stage"><div className="phone"><div className="phone-scroll">{<Register />}</div></div></div>;
+  }
+  return <StudentShell />;
+}
+
+function StudentShell() {
   const { state } = useStore();
   const [screen, setScreen] = useState({ name: 'home' });
   const scroller = useRef(null);
@@ -56,7 +107,8 @@ export default function StudentApp() {
 function useMyStats() {
   const { state } = useStore();
   return useMemo(() => {
-    const mine = state.transactions.filter((t) => t.userId === DEMO_USER.id);
+    const meId = state.me?.id;
+    const mine = state.transactions.filter((t) => t.userId === meId);
     const verified = mine.filter((t) => t.status === 'verificada');
     const subs = verified.filter((t) => t.substitution === 'confirmada');
     const savings = verified.reduce((s, t) => s + t.discount, 0);
@@ -67,7 +119,7 @@ function useMyStats() {
     if (!weeks.has(w)) w -= 7 * 86400000;
     while (weeks.has(w)) { streak++; w -= 7 * 86400000; }
     return { mine, verified, subs, savings, streak, pending: mine.filter((t) => t.status === 'pendiente') };
-  }, [state.transactions]);
+  }, [state.transactions, state.me]);
 }
 
 function Header({ title, back, go, right }) {
@@ -114,7 +166,7 @@ function Home({ go }) {
       <div className="s-hello">
         <div>
           <p className="eyebrow">Distrito Tec · demostración</p>
-          <h1>Hola, {DEMO_USER.name}</h1>
+          <h1>Hola, {state.me?.alias}</h1>
         </div>
         <SyntheticTag>Demo</SyntheticTag>
       </div>
@@ -203,12 +255,12 @@ function PromoDetail({ go, promoId }) {
   const r = rest(p.restaurantId);
   const usedToday = state.transactions.filter((t) => t.promoId === p.id && t.status === 'verificada' && new Date(t.createdAt).toDateString() === new Date().toDateString()).length;
   const left = Math.max(p.dailyCap - usedToday, 0);
-  const pending = state.codes.find((c) => c.userId === DEMO_USER.id && c.promoId === p.id && codeStatus(c) === 'pendiente');
+  const pending = state.codes.find((c) => c.userId === state.me?.id && c.promoId === p.id && codeStatus(c) === 'pendiente');
 
   const generate = () => {
     if (pending) { go('qr', { code: pending.code }); return; }
     const code = newCode(PROMOTIONS.findIndex((x) => x.id === p.id));
-    dispatch({ type: 'GENERATE_CODE', promoId: p.id, userId: DEMO_USER.id, code });
+    dispatch({ type: 'GENERATE_CODE', promoId: p.id, userId: state.me.id, alias: state.me.alias, code });
     go('qr', { code });
   };
 
@@ -290,7 +342,7 @@ function QRScreen({ go, code }) {
     <div className="s-page">
       <Header title="Mi código" />
       <div className={`qr-card qr-${st}`}>
-        <p className="eyebrow">{r.name}</p>
+        <p className="eyebrow">{r.name} · {c.userAlias || state.me?.alias}</p>
         <h2>{p?.title}</h2>
         <div className="qr-wrap">
           <QR value={c.code} size={208} />
@@ -311,8 +363,8 @@ function QRScreen({ go, code }) {
             <li>Muestra este código o díctalo si no hay cámara.</li>
             <li>Espera la confirmación en esta pantalla.</li>
           </ol>
-          <Notice tone="info" title="Para continuar la demo">En otro teléfono (o en este), abre el perfil <b>Restaurante</b>, entra a <b>{r.name}</b> y usa <b>Escanear QR</b> o escribe el código.</Notice>
-          <p className="fine">Sin servidor en esta demo: si el restaurante valida desde otro teléfono, el comprobante aparece en ese teléfono, no en este.</p>
+          <div className="waiting"><span className="pulse" aria-hidden="true" />Esperando validación de {r.name}… esta pantalla se actualiza sola.</div>
+          <Notice tone="info" title="Para continuar la demo">En otro teléfono, abre el perfil <b>Restaurante</b>, entra a <b>{r.name}</b> y usa <b>Escanear QR</b>.</Notice>
           <Button variant="secondary" icon="x" onClick={() => dispatch({ type: 'CANCEL_CODE', code: c.code })}>Cancelar código</Button>
         </>
       ) : null}
@@ -328,6 +380,8 @@ function QRScreen({ go, code }) {
           <h3 className="h3">{tx.status === 'verificada' ? 'Compra verificada' : 'Recipiente no aceptado'}</h3>
           <dl>
             <div><dt>Transacción</dt><dd>{tx.id}</dd></div>
+            <div><dt>Restaurante</dt><dd>{tx.restaurantName || r.name}{tx.validatedBy ? ` · atendió ${tx.validatedBy}` : ''}</dd></div>
+            <div><dt>Alumno</dt><dd>{tx.userAlias || state.me?.alias}</dd></div>
             <div><dt>Fecha</dt><dd>{fmtDateTime(tx.createdAt)}</dd></div>
             <div><dt>Precio original</dt><dd>{money(tx.listPrice)}</dd></div>
             <div><dt>Beneficio</dt><dd>{tx.discount ? `−${money(tx.discount)}` : 'Sin promoción'}</dd></div>
@@ -345,13 +399,14 @@ function QRScreen({ go, code }) {
 }
 
 function History({ go }) {
+  const { state } = useStore();
   const { mine, verified, subs, savings } = useMyStats();
   const [filter, setFilter] = useState('todas');
   const list = mine.filter((t) => filter === 'todas' || (filter === 'verificadas' ? t.status === 'verificada' : t.status !== 'verificada'));
   return (
     <div className="s-page">
       <Header title="Historial" />
-      <Notice tone="warn" title="Historial simulado">Incluye operaciones sintéticas de demostración más las que hagas en esta sesión.</Notice>
+      <Notice tone="info" title="Historial en vivo">Tus compras aparecen aquí en cuanto el restaurante las valida.{state.me?.demo ? ' El perfil Ana incluye además operaciones sintéticas.' : ''}</Notice>
       <section className="s-stats">
         <Stat label="Beneficios recibidos" value={money0(savings)} />
         <Stat label="Verificadas" value={num(verified.length)} />
@@ -444,6 +499,7 @@ function Impact() {
           <li><Icon name="check" size={16} />Etiquétalo con tu nombre para no perderlo.</li>
         </ul>
       </section>
+      <button className="link center" onClick={() => dispatch({ type: 'LOGOUT_USER' })}>Cambiar de usuario en este dispositivo ({state.me?.alias})</button>
     </div>
   );
 }

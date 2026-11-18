@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { useStore } from './lib/store.jsx';
+import { useStore, livePeers } from './lib/store.jsx';
+import { RESTAURANTS } from './lib/seed.js';
 import { Icon, Segmented } from './components/ui.jsx';
 import StudentApp from './student/StudentApp.jsx';
 import RestaurantApp from './restaurant/RestaurantApp.jsx';
@@ -17,10 +18,15 @@ const fromHash = () => {
 };
 
 export default function App() {
-  const { state, dispatch } = useStore();
+  const { state, dispatch, live, toasts, setPresence } = useStore();
+  const peers = livePeers(live.peers);
   const [profile, setProfile] = useState(fromHash);
   const [guide, setGuide] = useState(true);
   const [confirmReset, setConfirmReset] = useState(false);
+  useEffect(() => {
+    const who = profile === 'estudiante' ? state.me?.alias : profile === 'restaurante' ? RESTAURANTS.find((r) => r.id === state.restaurantSession)?.name : 'Panel institucional';
+    setPresence({ profile, who: who || null });
+  }, [profile, state.me, state.restaurantSession, setPresence, live.status]);
 
   useEffect(() => {
     const onHash = () => setProfile(fromHash());
@@ -35,12 +41,16 @@ export default function App() {
         <div className="brand">
           <span className="mark" aria-hidden="true"><i /></span>
           <div>
-            <b>Plataforma de reutilización · Distrito Tec</b>
+            <b><span className="brand-long">Plataforma de reutilización · </span>Distrito Tec</b>
             <span>Prototipo · nombre provisional · modo demostración</span>
           </div>
         </div>
         <Segmented ariaLabel="Perfil" options={PROFILES} value={profile} onChange={choose} />
         <div className="top-actions">
+          <span className={`live-pill ${live.status}`} title={`Sala: ${live.room}`}>
+            <span className={`live-dot ${live.status}`} />
+            <span>{live.status === 'connected' ? `En vivo · ${Math.max(1, peers.length)}` : live.status === 'connecting' ? 'Conectando…' : 'Sin conexión en vivo'}</span>
+          </span>
           <button className={`conn-toggle ${state.online ? 'on' : 'off'}`} onClick={() => dispatch({ type: 'SET_ONLINE', online: !state.online })}
             aria-pressed={!state.online} title="Simula una falla de conexión para mostrar el modo contingencia">
             <Icon name={state.online ? 'wifi' : 'wifiOff'} size={16} />
@@ -74,8 +84,16 @@ export default function App() {
         {profile === 'restaurante' && <RestaurantApp />}
         {profile === 'institucion' && <InstitutionApp />}
       </div>
+      <div className="toasts" aria-live="polite">
+        {toasts.map((t) => (
+          <div key={t.id} className={`toast toast-${t.tone}`}>
+            <Icon name={t.tone === 'ok' ? 'check' : t.tone === 'warn' ? 'alert' : 'live'} size={18} />
+            <div><b>{t.title}</b><span>{t.body}</span></div>
+          </div>
+        ))}
+      </div>
       <footer className="app-foot">
-        Prototipo de demostración. Funciona sin servidor: los datos se guardan solo en este navegador (cada teléfono tiene los suyos). Restaurantes, usuarios y cifras son sintéticos.
+        Prototipo de demostración. Lo que registran los participantes se comparte en vivo entre dispositivos mediante un servidor público de mensajería: no escribas datos personales. Restaurantes, usuarios y cifras son sintéticos.
         No representa una alianza, contrato ni implementación con ninguna institución.
       </footer>
     </div>

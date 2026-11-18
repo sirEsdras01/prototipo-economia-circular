@@ -64,6 +64,7 @@ function Login() {
   const [rid, setRid] = useState('r1');
   const r = RESTAURANTS.find((x) => x.id === rid);
   const [pin, setPin] = useState(r.pin);
+  const [staff, setStaff] = useState('');
   useEffect(() => setPin(RESTAURANTS.find((x) => x.id === rid).pin), [rid]);
   const ok = pin === r.pin;
   return (
@@ -80,7 +81,10 @@ function Login() {
         <Field label="PIN de demostración" hint={`PIN de ${r.name}: ${r.pin}`}>
           <input value={pin} onChange={(e) => setPin(e.target.value)} inputMode="numeric" maxLength={4} />
         </Field>
-        <Button icon="arrowRight" disabled={!ok} onClick={() => dispatch({ type: 'LOGIN_RESTAURANT', id: rid })}>Entrar (demo)</Button>
+        <Field label="Nombre de quien atiende (opcional)" hint="Queda registrado en cada validación.">
+          <input value={staff} onChange={(e) => setStaff(e.target.value)} maxLength={24} placeholder="Ej. Mariana" />
+        </Field>
+        <Button icon="arrowRight" disabled={!ok} onClick={() => dispatch({ type: 'LOGIN_RESTAURANT', id: rid, staff: staff.trim() })}>Entrar (demo)</Button>
         {!ok ? <p className="error-text">PIN incorrecto.</p> : null}
       </div>
     </div>
@@ -283,7 +287,7 @@ function Validate({ rid }) {
     const chk = checkCode(state, code, rid);
     if (!chk.ok) { setError({ text: chk.reason, duplicate: chk.duplicate }); return; }
     const promo = state.promotions.find((p) => p.id === chk.code.promoId);
-    setCtx({ code, promo, offline: false, startedAt: Date.now() });
+    setCtx({ code, promo, offline: false, startedAt: Date.now(), alias: chk.code.userAlias });
     setListPrice(promo.price); setError(null); setStep('container');
   };
 
@@ -362,6 +366,7 @@ function Validate({ rid }) {
 
       {step === 'container' && ctx && (
         <section className="panel">
+          {ctx.alias ? <div className="student-chip"><Icon name="users" size={16} /><span>Alumno: <b>{ctx.alias}</b></span></div> : null}
           <div className="ctx-line">
             <span className="mono">{ctx.code}</span>
             {ctx.offline ? <Badge tone="warn">Sin verificar</Badge> : <Badge tone="ok">Código válido</Badge>}
@@ -419,9 +424,9 @@ function Validate({ rid }) {
           {result.offline ? (
             <p>Folio <b className="mono">{result.folio}</b>. Se confirmará o rechazará al sincronizar. No cuenta en los indicadores mientras esté pendiente.</p>
           ) : (
-            <p>{accepted ? `Cobro de ${money(paid)} · comisión ${money(commission)} · ${subst === 'confirmada' ? 'sustitución confirmada' : 'sin sustitución confirmada'}.` : 'El código quedó cerrado; el cliente puede generar uno nuevo en otra visita.'}</p>
+            <p>{ctx.alias ? <><b>{ctx.alias}</b> · </> : null}{accepted ? `Cobro de ${money(paid)} · comisión ${money(commission)} · ${subst === 'confirmada' ? 'sustitución confirmada' : 'sin sustitución confirmada'}.` : 'El código quedó cerrado; el cliente puede generar uno nuevo en otra visita.'}</p>
           )}
-          <p className="muted">Tiempo de validación: {result.seconds} s</p>
+          <p className="muted">Tiempo de validación: {result.seconds} s{!result.offline ? ' · enviado al alumno y al panel institucional' : ''}</p>
           <Button icon="qr" onClick={reset}>Validar otra compra</Button>
         </section>
       )}
